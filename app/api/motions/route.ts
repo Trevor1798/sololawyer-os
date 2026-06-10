@@ -31,8 +31,40 @@ export async function POST(request: NextRequest) {
     const validated = LegalDocumentSchema.parse(body);
 
     // Shield system prompt
-    const systemPrompt = `You are a legal document assistant. Generate a professional motion document according to legal standards.`;
-    const shieldedPrompt = shieldSystemPrompt(validated.content, systemPrompt);
+    // Shield and sanitize input
+const systemPrompt = `You are an expert legal document assistant specializing in Florida court motions. 
+Generate a complete, professional, properly formatted motion document for the Tenth Judicial Circuit, Polk County, Florida.
+Output ONLY the motion document text itself — no meta-commentary, no instructions, no system messages.
+Always end with a signature block placeholder and certificate of service.
+IMPORTANT: This is a draft for attorney review only. Include a disclaimer at the bottom.`;
+
+const shieldedPrompt = shieldSystemPrompt(validated.content, systemPrompt);
+
+// Call Claude to generate the actual motion content
+const Anthropic = (await import('@anthropic-ai/sdk')).default;
+const client = new Anthropic();
+const message = await client.messages.create({
+  model: 'claude-sonnet-4-6',
+  max_tokens: 4096,
+  system: systemPrompt,
+  messages: [
+    {
+      role: 'user',
+      content: `Generate a Motion to Compel Discovery for the following case:
+Court: ${validated.caseInfo.courtName}
+Case Number: ${validated.caseInfo.caseNumber || 'To be assigned'}
+Plaintiff: ${validated.caseInfo.plaintiff}
+Defendant: ${validated.caseInfo.defendant}
+State: ${validated.state}
+
+Motion Details: ${validated.content}`,
+    },
+  ],
+});
+
+const generatedContent = message.content[0].type === 'text' 
+  ? message.content[0].text 
+  : '';
 
     // Get user's UUID from database (needed for foreign key)
     const supabase = await createServerSupabase(userId);
@@ -78,7 +110,7 @@ export async function POST(request: NextRequest) {
     const docxBuffer = await generateMotionDocument(
       validated.state,
       validated.caseInfo,
-      shieldedPrompt,
+      generatedContent,
       {
         meetAndConfer: validated.documentType === 'declaration',
         sanctions: validated.documentType === 'sanctions',

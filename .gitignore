@@ -52,3 +52,6 @@ generate-and-update-keys.js
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# clerk configuration (can include secrets)
+/.clerk/

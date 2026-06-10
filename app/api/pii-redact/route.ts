@@ -1,6 +1,6 @@
 import { auth } from '@clerk/nextjs/server';
 import { NextRequest, NextResponse } from 'next/server';
-import { redactPII, processWithGemini } from '@/lib/security/pii-redaction';
+import { redactPII, processWithClaude } from '@/lib/security/pii-redaction';
 import { logAuditEvent, getClientIP } from '@/lib/security/audit';
 import { shieldSystemPrompt } from '@/lib/security/prompt-guard';
 
@@ -28,7 +28,7 @@ export async function POST(request: NextRequest) {
     const shieldedPrompt = shieldSystemPrompt(prompt || '', systemPrompt);
 
     // Step 3: Process with Gemini
-    const processed = await processWithGemini(redactedText, shieldedPrompt);
+  const processed = await processWithClaude(redactedText, shieldedPrompt);
 
     // Log audit
     await logAuditEvent({

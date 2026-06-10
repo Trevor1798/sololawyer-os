@@ -1,9 +1,6 @@
-import { DocumentProcessorServiceClient } from '@google-cloud/documentai';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import Anthropic from '@anthropic-ai/sdk';
 
-const projectId = process.env.GOOGLE_CLOUD_PROJECT_ID!;
-const location = process.env.GOOGLE_CLOUD_LOCATION || 'us';
-const processorId = process.env.DOCUMENT_AI_PROCESSOR_ID!;
+const client = new Anthropic();
 
 // PII patterns for redaction
 const PII_PATTERNS = {
@@ -26,79 +23,49 @@ export interface RedactionResult {
 export async function redactPII(text: string): Promise<RedactionResult> {
   const redactions: RedactionResult['redactions'] = [];
   let redactedText = text;
-  
-  // Use Document AI if available
-  if (projectId && processorId) {
-    try {
-      const client = new DocumentProcessorServiceClient();
-      const name = `projects/${projectId}/locations/${location}/processors/${processorId}`;
-      
-      const [result] = await client.processDocument({
-        name,
-        rawDocument: {
-          content: Buffer.from(text),
-          mimeType: 'text/plain',
-        },
-      });
-      
-      // Extract PII entities from Document AI response
-      const entities = result.document?.entities || [];
-      for (const entity of entities) {
-        if (entity.type?.includes('PERSON') || 
-            entity.type?.includes('SSN') || 
-            entity.type?.includes('DATE_OF_BIRTH') ||
-            entity.type?.includes('ADDRESS')) {
-          const value = entity.mentionText || '';
-          if (value) {
-            redactedText = redactedText.replace(value, '[REDACTED]');
-            redactions.push({
-              type: entity.type || 'UNKNOWN',
-              original: value,
-              position: entity.anchor?.textSegments?.[0]?.startIndex || 0,
-            });
-          }
-        }
-      }
-    } catch (error) {
-      console.error('Document AI error, falling back to regex:', error);
-      // Fallback to regex
-    }
-  }
-  
-  // Fallback: Regex-based redaction
-  if (redactions.length === 0) {
-    for (const [type, pattern] of Object.entries(PII_PATTERNS)) {
-      const matches = text.matchAll(pattern);
-      for (const match of matches) {
-        if (match[0]) {
-          redactedText = redactedText.replace(match[0], `[REDACTED_${type.toUpperCase()}]`);
-          redactions.push({
-            type,
-            original: match[0],
-            position: match.index || 0,
-          });
-        }
+
+  // Regex-based redaction
+  for (const [type, pattern] of Object.entries(PII_PATTERNS)) {
+    const matches = text.matchAll(pattern);
+    for (const match of matches) {
+      if (match[0]) {
+        redactedText = redactedText.replace(
+          match[0],
+          `[REDACTED_${type.toUpperCase()}]`
+        );
+        redactions.push({
+          type,
+          original: match[0],
+          position: match.index || 0,
+        });
       }
     }
   }
-  
+
   return { redactedText, redactions };
 }
 
-export async function processWithGemini(
+export async function processWithClaude(
   redactedText: string,
   prompt: string
 ): Promise<string> {
-  const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY!);
-  const model = genAI.getGenerativeModel({ model: 'gemini-pro' });
-  
-  const systemPrompt = `You are a legal document assistant. Process the following redacted document according to the user's request. Never attempt to reconstruct or guess redacted information.`;
-  
-  const fullPrompt = `${systemPrompt}\n\nUser Request: ${prompt}\n\nDocument:\n${redactedText}`;
-  
-  const result = await model.generateContent(fullPrompt);
-  const response = await result.response;
-  
-  return response.text();
-}
+  const message = await client.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 4096,
+    system:
+      'You are a legal document assistant. Process the following redacted document according to the user request. Never attempt to reconstruct or guess redacted information. Always include a disclaimer that outputs must be reviewed by a licensed attorney before filing.',
+    messages: [
+      {
+        role: 'user',
+        content: `User Request: ${prompt}\n\nDocument:\n${redactedText}`,
+      },
+    ],
+  });
 
+  const content = message.content[0];
+  if (content.type !== 'text') {
+    throw new Error('Unexpected response type from Claude');
+  }
+
+  return content.text;
+}
